@@ -42,7 +42,7 @@ namespace GooglePhotosMetaDataMerger
         private static void TraverseFolder(string folder)
         {
             if (string.IsNullOrWhiteSpace(folder)) throw new ArgumentNullException(nameof(folder));
-            if (!System.IO.Directory.Exists(folder)) throw new ArgumentException("Folder not found");
+            if (!System.IO.Directory.Exists(folder)) throw new ArgumentException($"Folder not found '{folder}'");
             if (_verbose) Console.WriteLine($"Traversing folder {folder}");
 
             // Create mirrored directory structure        
@@ -65,6 +65,12 @@ namespace GooglePhotosMetaDataMerger
         private static void MapFileMetaData(string filePath)
         {
             if (string.IsNullOrWhiteSpace(filePath)) throw new ArgumentNullException(nameof(filePath));
+
+            if (!File.Exists($"{filePath}.json"))
+            {
+                if (_verbose) Console.WriteLine($"Cannot find metadata file for {filePath}, skipping merge.");
+                return;
+            }
 
             // Open the file, create ImageSharp Image and load metadata for the file
             using (var imageInBytes = File.OpenRead(filePath))
