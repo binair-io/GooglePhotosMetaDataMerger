@@ -76,6 +76,8 @@ namespace GooglePhotosMetaDataMerger
 
                 // Root of metadata file matching current file
                 var metadataRoot = metadata.RootElement;
+                // Get image exif profile
+                var exifProfile = image.Metadata.ExifProfile ?? new ExifProfile();
 
                 if (int.TryParse(metadataRoot.GetProperty("photoTakenTime").GetProperty("timestamp").GetString(), out int creationTimestamp))
                 {
@@ -87,10 +89,13 @@ namespace GooglePhotosMetaDataMerger
                     var dt = metaDateTimeOriginal.ToString(dateFormat);
 
                     // Set exif value
-                    image.Metadata.ExifProfile.SetValue(ExifTag.DateTimeOriginal, dt);
+                    exifProfile.SetValue(ExifTag.DateTimeOriginal, dt);
 
                     if (_verbose) Console.WriteLine($"DateTimeOriginal: {dt.ToString()}");
                 }
+
+                // Set exif profile
+                image.Metadata.ExifProfile = exifProfile;
 
                 // Write file to mirrored folder structure
                 image.Save(filePath.Replace(_folder, _outputRootFolder));
