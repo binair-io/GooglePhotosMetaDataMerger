@@ -72,6 +72,12 @@ namespace GooglePhotosMetaDataMerger
                 return;
             }
 
+            if(File.Exists(filePath.Replace(_folder, _outputRootFolder)))
+            {
+                if(_verbose) Console.WriteLine($"File {filePath} already processed, skipping merge.");
+                return;
+            }
+
             // Open the file, create ImageSharp Image and load metadata for the file
             using (var imageInBytes = File.OpenRead(filePath))
             using (var image = Image.Load(imageInBytes, out var imageFormat))
