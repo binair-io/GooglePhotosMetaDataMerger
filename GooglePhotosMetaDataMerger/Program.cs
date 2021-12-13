@@ -72,45 +72,52 @@ namespace GooglePhotosMetaDataMerger
                 return;
             }
 
-            if(File.Exists(filePath.Replace(_folder, _outputRootFolder)))
+            if (File.Exists(filePath.Replace(_folder, _outputRootFolder)))
             {
-                if(_verbose) Console.WriteLine($"File {filePath} already processed, skipping merge.");
+                if (_verbose) Console.WriteLine($"File {filePath} already processed, skipping merge.");
                 return;
             }
 
-            // Open the file, create ImageSharp Image and load metadata for the file
-            using (var imageInBytes = File.OpenRead(filePath))
-            using (var image = Image.Load(imageInBytes, out var imageFormat))
-            using (var metadata = JsonDocument.Parse(File.ReadAllBytes($"{filePath}.json")))
+            try
             {
-                // Format for Exif data
-                const string dateFormat = "yyyy:MM:dd HH:mm:ss";
-
-                // Root of metadata file matching current file
-                var metadataRoot = metadata.RootElement;
-                // Get image exif profile
-                var exifProfile = image.Metadata.ExifProfile ?? new ExifProfile();
-
-                if (int.TryParse(metadataRoot.GetProperty("photoTakenTime").GetProperty("timestamp").GetString(), out int creationTimestamp))
+                // Open the file, create ImageSharp Image and load metadata for the file
+                using (var imageInBytes = File.OpenRead(filePath))
+                using (var image = Image.Load(imageInBytes, out var imageFormat))
+                using (var metadata = JsonDocument.Parse(File.ReadAllBytes($"{filePath}.json")))
                 {
-                    // Google Photos timestamp is java based so seconds need to be added to this date
-                    var javaStartDateTime = new DateTime(1970, 1, 1, 0, 0, 0, 0);
+                    // Format for Exif data
+                    const string dateFormat = "yyyy:MM:dd HH:mm:ss";
 
-                    // Add seconds to base date and format to exif date format
-                    var metaDateTimeOriginal = javaStartDateTime.AddSeconds(creationTimestamp);
-                    var dt = metaDateTimeOriginal.ToString(dateFormat);
+                    // Root of metadata file matching current file
+                    var metadataRoot = metadata.RootElement;
+                    // Get image exif profile
+                    var exifProfile = image.Metadata.ExifProfile ?? new ExifProfile();
 
-                    // Set exif value
-                    exifProfile.SetValue(ExifTag.DateTimeOriginal, dt);
+                    if (int.TryParse(metadataRoot.GetProperty("photoTakenTime").GetProperty("timestamp").GetString(), out int creationTimestamp))
+                    {
+                        // Google Photos timestamp is java based so seconds need to be added to this date
+                        var javaStartDateTime = new DateTime(1970, 1, 1, 0, 0, 0, 0);
 
-                    if (_verbose) Console.WriteLine($"DateTimeOriginal: {dt.ToString()}");
+                        // Add seconds to base date and format to exif date format
+                        var metaDateTimeOriginal = javaStartDateTime.AddSeconds(creationTimestamp);
+                        var dt = metaDateTimeOriginal.ToString(dateFormat);
+
+                        // Set exif value
+                        exifProfile.SetValue(ExifTag.DateTimeOriginal, dt);
+
+                        if (_verbose) Console.WriteLine($"DateTimeOriginal: {dt.ToString()}");
+                    }
+
+                    // Set exif profile
+                    image.Metadata.ExifProfile = exifProfile;
+
+                    // Write file to mirrored folder structure
+                    image.Save(filePath.Replace(_folder, _outputRootFolder));
                 }
-
-                // Set exif profile
-                image.Metadata.ExifProfile = exifProfile;
-
-                // Write file to mirrored folder structure
-                image.Save(filePath.Replace(_folder, _outputRootFolder));
+            }
+            catch (UnknownImageFormatException)
+            {
+                if(_verbose) Console.WriteLine("Could not load image type, skipping merge.");
             }
         }
     }
