@@ -11,7 +11,7 @@
             "preLaunchTask": "build",
             // If you have changed target frameworks, make sure to update the program path.
             "program": "${workspaceFolder}/GooglePhotosMetaDataMerger/bin/Debug/netcoreapp3.1/GooglePhotosMetaDataMerger.dll",
-            "args": ["--folder", "${workspaceFolder}/GooglePhotosMetaDataMerger.Tests/Data/Images"],
+            "args": ["--folder", "C:\\Users\\steve\\Desktop\\gphotos\\Takeout\\test"],
             "cwd": "${workspaceFolder}/GooglePhotosMetaDataMerger",
             // For more information about the 'console' field, see https://aka.ms/VSCode-CS-LaunchJson-Console
             "console": "externalTerminal",

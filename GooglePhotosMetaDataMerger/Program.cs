@@ -3,21 +3,21 @@ using System.IO;
 using System.Linq;
 using CommandLine;
 using System.Text.Json;
-using SixLabors.ImageSharp.Metadata.Profiles.Exif;
-using SixLabors.ImageSharp;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace GooglePhotosMetaDataMerger
 {
     class Program
     {
-        private static bool _verbose;
-        private static string _outputRootFolder;
         private static string _folder;
+        private static string _outputRootFolder;
+        private static string _outputRootFolderBadProcess;
+        private static ILogger<Program> _logger;
 
         public class Options
         {
-            [Option('v', "verbose", Required = false, HelpText = "Set output to verbose messages.")]
-            public bool Verbose { get; set; }
 
             [Option('f', "folder", Required = true, HelpText = "Set folder to scan files recursively.")]
             public string Folder { get; set; }
@@ -28,22 +28,33 @@ namespace GooglePhotosMetaDataMerger
             Parser.Default.ParseArguments<Options>(args)
                    .WithParsed<Options>(o =>
                    {
-                       _verbose = true; // o.Verbose;
                        _folder = o.Folder;
                        _outputRootFolder = Path.GetFullPath(o.Folder) + "_merged";
-
-                       TraverseFolder(o.Folder);
+                       _outputRootFolderBadProcess = Path.GetFullPath(o.Folder) + "_bad";
                    });
 
-            if (_verbose) Console.WriteLine("Finished!");
-            Console.ReadLine();
+            IHost host = Host.CreateDefaultBuilder(args).ConfigureServices(services =>
+            {
+                services.AddLogging(loggingBuilder =>
+                {
+                    loggingBuilder.AddFile(Path.Combine(_outputRootFolder, "log.txt"), append: true);
+                });
+            }).Build();
+
+            _logger = host.Services.GetRequiredService<ILogger<Program>>();
+            _logger.LogInformation($"Begin processing: {DateTime.Now}");
+
+            TraverseFolder(_folder);
+
+            _logger.LogInformation($"Finished processing: {DateTime.Now}");
         }
 
         private static void TraverseFolder(string folder)
         {
             if (string.IsNullOrWhiteSpace(folder)) throw new ArgumentNullException(nameof(folder));
             if (!System.IO.Directory.Exists(folder)) throw new ArgumentException($"Folder not found '{folder}'");
-            if (_verbose) Console.WriteLine($"Traversing folder {folder}");
+
+            _logger.LogDebug($"Traverse folder: {folder}");
 
             // Create mirrored directory structure        
             Directory.CreateDirectory(folder.Replace(_folder, _outputRootFolder));
@@ -57,7 +68,7 @@ namespace GooglePhotosMetaDataMerger
             // Loop all files in folder that are not json files
             foreach (var filePath in Directory.GetFiles(folder).Where(x => !x.EndsWith(".json")))
             {
-                if (_verbose) Console.WriteLine(filePath);
+                _logger.LogDebug($"MapFileMetaData: {filePath}");
                 MapFileMetaData(filePath);
             }
         }
@@ -68,57 +79,77 @@ namespace GooglePhotosMetaDataMerger
 
             if (!File.Exists($"{filePath}.json"))
             {
-                if (_verbose) Console.WriteLine($"Cannot find metadata file for {filePath}, skipping merge.");
+                _logger.LogWarning($"Cannot find metadata file for {filePath}, skipping merge.");
                 return;
             }
 
             if (File.Exists(filePath.Replace(_folder, _outputRootFolder)))
             {
-                if (_verbose) Console.WriteLine($"File {filePath} already processed, skipping merge.");
+                _logger.LogDebug($"File {filePath} already processed, skipping merge.");
                 return;
             }
 
-            try
+            using (var metadata = JsonDocument.Parse(File.ReadAllBytes($"{filePath}.json")))
             {
-                // Open the file, create ImageSharp Image and load metadata for the file
-                using (var imageInBytes = File.OpenRead(filePath))
-                using (var image = Image.Load(imageInBytes, out var imageFormat))
-                using (var metadata = JsonDocument.Parse(File.ReadAllBytes($"{filePath}.json")))
+                // Root of metadata file matching current file
+                var metadataRoot = metadata.RootElement;
+                // Google Photos timestamp is java based so seconds need to be added to this date
+                var javaStartDateTime = new DateTime(1970, 1, 1, 0, 0, 0, 0);
+
+                if (int.TryParse(metadataRoot.GetProperty("photoTakenTime").GetProperty("timestamp").GetString(), out int creationTimestamp))
                 {
-                    // Format for Exif data
-                    const string dateFormat = "yyyy:MM:dd HH:mm:ss";
+                    // Add seconds to base date and format to exif date format
+                    var metaDateTimeOriginal = javaStartDateTime.AddSeconds(creationTimestamp);
+                    TagLib.File tfile;
 
-                    // Root of metadata file matching current file
-                    var metadataRoot = metadata.RootElement;
-                    // Get image exif profile
-                    var exifProfile = image.Metadata.ExifProfile ?? new ExifProfile();
-
-                    if (int.TryParse(metadataRoot.GetProperty("photoTakenTime").GetProperty("timestamp").GetString(), out int creationTimestamp))
+                    try
                     {
-                        // Google Photos timestamp is java based so seconds need to be added to this date
-                        var javaStartDateTime = new DateTime(1970, 1, 1, 0, 0, 0, 0);
+                        // Instantiate taglib file
+                        tfile = TagLib.File.Create(filePath);
 
-                        // Add seconds to base date and format to exif date format
-                        var metaDateTimeOriginal = javaStartDateTime.AddSeconds(creationTimestamp);
-                        var dt = metaDateTimeOriginal.ToString(dateFormat);
-
-                        // Set exif value
-                        exifProfile.SetValue(ExifTag.DateTimeOriginal, dt);
-
-                        if (_verbose) Console.WriteLine($"DateTimeOriginal: {dt.ToString()}");
+                        if (tfile is TagLib.Image.File)
+                        {
+                            var itag = (tfile as TagLib.Image.File).Tag as TagLib.Image.CombinedImageTag;
+                            itag.DateTime = metaDateTimeOriginal;
+                        }
+                        else
+                        {
+                            _logger.LogWarning($"File: {filePath} :  Implement MimeType: {tfile.MimeType}");
+                        }
+                        tfile.Save();
+                        File.Copy(filePath, filePath.Replace(_folder, _outputRootFolder));
                     }
-
-                    // Set exif profile
-                    image.Metadata.ExifProfile = exifProfile;
-
-                    // Write file to mirrored folder structure
-                    image.Save(filePath.Replace(_folder, _outputRootFolder));
+                    catch (InvalidOperationException ex)
+                    {
+                        _logger.LogWarning($"File: {filePath} : InvalidOperation: {ex.Message}");
+                        CopyFaultyFiles(filePath);
+                    }
+                    catch (TagLib.UnsupportedFormatException ex)
+                    {
+                        _logger.LogWarning($"File: {filePath} : UnsupportedFormatException: {ex.Message}");
+                        CopyFaultyFiles(filePath);
+                    }
                 }
             }
-            catch (UnknownImageFormatException)
+        }
+
+        private static void CopyFaultyFiles(string filePath)
+        {
+            if (File.Exists(filePath.Replace(_folder, _outputRootFolderBadProcess)))
             {
-                if(_verbose) Console.WriteLine("Could not load image type, skipping merge.");
+                _logger.LogDebug($"File {filePath} already in Bad folder");
+                return;
             }
+
+            // Create directory in _bad folder structure
+            Directory.CreateDirectory(
+                Path.GetDirectoryName(filePath)
+                .Replace(_folder, _outputRootFolderBadProcess));
+
+            // Copy File to "Bad" folder
+            File.Copy(filePath, filePath.Replace(_folder, _outputRootFolderBadProcess));
+            File.Copy($"{filePath}.json", $"{filePath}.json".Replace(_folder, _outputRootFolderBadProcess));
+            _logger.LogDebug($"Copied file {filePath} to Bad folder {filePath.Replace(_folder, _outputRootFolderBadProcess)}");
         }
     }
 }
